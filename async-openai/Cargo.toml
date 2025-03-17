@@ -29,15 +29,19 @@ byot = []
 yaml = ["dep:serde_yaml"]
 # Enable XML support for structured output
 xml = ["dep:quick-xml"]
-# Enable JSON Schema validation
-schema-validation = ["dep:jsonschema", "dep:schemars", "dep:url", "dep:anyhow"]
+# Keep feature flag for backward compatibility (empty feature)
+schema-validation = []
 
 [dependencies]
-anyhow = { version = "1.0", optional = true }
+anyhow = "1.0"  # Now a regular dependency
 async-openai-macros = { path = "../async-openai-macros", version = "0.1.0" }
 backoff = { version = "0.4.0", features = ["tokio"] }
 base64 = "0.22.1"
 futures = "0.3.31"
+# Added: schema-validation dependencies are now non-optional
+jsonschema = "0.18.1"
+schemars = "0.8.16"
+url = "2.5.0"
 rand = "0.8.5"
 reqwest = { version = "0.12.12", features = [
   "json",
@@ -60,9 +64,7 @@ tokio-tungstenite = { version = "0.26.1", optional = true, default-features = fa
 regex = "1.10.5"
 serde_yaml = { version = "0.9.33", optional = true }
 quick-xml = { version = "0.31.0", features = ["serialize"], optional = true }
-jsonschema = { version = "0.18.1", optional = true }
-schemars = { version = "0.8.16", optional = true }
-url = { version = "2.5.0", optional = true }
+indexmap = { version = "2.2.6", features = ["serde"] }
 
 [dev-dependencies]
 tokio-test = "0.4.4"

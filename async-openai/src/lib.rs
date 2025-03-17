@@ -180,7 +180,6 @@ pub use project_users::ProjectUsers;
 pub use projects::Projects;
 pub use runs::Runs;
 pub use steps::Steps;
-pub use structured::StructuredInstructionGenerator;
 pub use threads::Threads;
 pub use uploads::Uploads;
 pub use users::Users;

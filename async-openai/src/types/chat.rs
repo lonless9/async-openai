@@ -487,7 +487,7 @@ pub enum ResponseFormat {
     /// The type of response format being defined: `json_schema`
     JsonSchema {
         json_schema: ResponseFormatJsonSchema,
-    }
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]

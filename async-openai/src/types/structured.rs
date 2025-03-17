@@ -1,271 +1,305 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::marker::PhantomData;
+use indexmap::IndexMap;
 
-#[cfg(feature = "schema-validation")]
-use schemars::JsonSchema;
+#[allow(unused_imports)]
+use schemars::{schema_for, JsonSchema};
 
-/// Trait representing structured output
-#[cfg(feature = "schema-validation")]
-pub trait StructuredOutput: Serialize + for<'de> Deserialize<'de> + Send + Sync + JsonSchema {}
+/// Trait for structured output types
+///
+/// This trait marks types that can be used as structured output for LLM responses
+/// It requires the type to be serializable, deserializable, cloneable, and debuggable
+pub trait Structured: Clone + std::fmt::Debug + Serialize {}
 
-#[cfg(not(feature = "schema-validation"))]
-pub trait StructuredOutput: Serialize + for<'de> Deserialize<'de> + Send + Sync {}
+// Implement the trait for all types that meet the requirements
+impl<T> Structured for T where T: Clone + std::fmt::Debug + Serialize {}
 
-/// Automatically implement StructuredOutput for all types that implement the necessary traits
-#[cfg(feature = "schema-validation")]
-impl<T> StructuredOutput for T where T: Serialize + for<'de> Deserialize<'de> + Send + Sync + JsonSchema {}
-
-#[cfg(not(feature = "schema-validation"))]
-impl<T> StructuredOutput for T where T: Serialize + for<'de> Deserialize<'de> + Send + Sync {}
-
-/// Structured data parsing error
-#[derive(Debug, thiserror::Error)]
-pub enum StructuredDataError {
-    #[error("JSON parsing failed: {0}")]
-    JsonParse(#[from] serde_json::Error),
-    
-    #[error("Unable to extract JSON from response: {0}")]
-    Extraction(String),
-    
-    #[cfg(feature = "yaml")]
-    #[error("YAML parsing failed: {0}")]
-    YamlParse(#[from] serde_yaml::Error),
-    
-    #[cfg(feature = "xml")]
-    #[error("XML parsing failed: {0}")]
-    XmlParse(String),
-    
-    #[cfg(feature = "schema-validation")]
-    #[error("Validation failed: {0}")]
-    ValidationError(String),
-    
-    #[error("Other error: {0}")]
-    Other(String),
-}
-
-/// Structured instruction configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema-validation", derive(JsonSchema))]
-#[serde(bound = "T: StructuredOutput")]
-pub struct StructuredInstructionConfig<T: StructuredOutput> {
-    /// Prefix text for generating instructions
-    pub prefix: Option<String>,
-    
-    /// Suffix text for generating instructions
-    pub suffix: Option<String>,
-    
-    /// Specified output format (default is JSON)
-    pub format: OutputFormat,
-    
-    /// Schema data (for describing expected structure)
-    pub schema: Option<T>,
-    
-    /// Schema descriptions (for describing field meanings)
-    pub descriptions: Option<HashMap<String, String>>,
-    
-    /// Whether to perform schema validation (requires schema-validation feature)
-    #[cfg(feature = "schema-validation")]
-    pub validate: bool,
-    
-    /// Custom validation options
-    #[cfg(feature = "schema-validation")]
-    pub validation_options: Option<ValidationOptions>,
-    
-    /// Type marker (PhantomData)
-    #[serde(skip)]
-    pub _marker: PhantomData<T>,
-}
-
-/// Builder for StructuredInstructionConfig
-#[derive(Debug, Clone)]
-pub struct StructuredInstructionConfigBuilder<T: StructuredOutput> {
-    /// Internal configuration
-    config: StructuredInstructionConfig<T>,
-}
-
-impl<T: StructuredOutput> StructuredInstructionConfigBuilder<T> {
-    /// Create new builder instance
-    pub fn new() -> Self {
-        Self {
-            config: StructuredInstructionConfig {
-                prefix: None,
-                suffix: None,
-                format: OutputFormat::default(),
-                schema: None,
-                descriptions: Some(HashMap::new()),
-                #[cfg(feature = "schema-validation")]
-                validate: false,
-                #[cfg(feature = "schema-validation")]
-                validation_options: None,
-                _marker: PhantomData,
-            }
-        }
-    }
-    
-    /// Set prefix text
-    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.config.prefix = Some(prefix.into());
-        self
-    }
-    
-    /// Set suffix text
-    pub fn suffix(mut self, suffix: impl Into<String>) -> Self {
-        self.config.suffix = Some(suffix.into());
-        self
-    }
-    
-    /// Set output format
-    pub fn format(mut self, format: OutputFormat) -> Self {
-        self.config.format = format;
-        self
-    }
-    
-    /// Set data structure template
-    pub fn schema(mut self, schema: T) -> Self {
-        self.config.schema = Some(schema);
-        self
-    }
-    
-    /// Add field description
-    pub fn add_description(mut self, field: impl Into<String>, description: impl Into<String>) -> Self {
-        let descriptions = self.config.descriptions.get_or_insert_with(HashMap::new);
-        descriptions.insert(field.into(), description.into());
-        self
-    }
-    
-    /// Batch add field descriptions
-    pub fn add_descriptions<K, V, I>(mut self, descriptions: I) -> Self
-    where
-        K: Into<String>,
-        V: Into<String>,
-        I: IntoIterator<Item = (K, V)>,
-    {
-        let config_descriptions = self.config.descriptions.get_or_insert_with(HashMap::new);
-        
-        for (field, description) in descriptions {
-            config_descriptions.insert(field.into(), description.into());
-        }
-        
-        self
-    }
-    
-    /// Set whether to perform data validation (requires schema-validation feature)
-    #[cfg(feature = "schema-validation")]
-    pub fn validate(mut self, validate: bool) -> Self {
-        self.config.validate = validate;
-        self
-    }
-    
-    /// Set validation options (requires schema-validation feature)
-    #[cfg(feature = "schema-validation")]
-    pub fn validation_options(mut self, options: ValidationOptions) -> Self {
-        self.config.validation_options = Some(options);
-        self
-    }
-    
-    /// Build and return configuration
-    pub fn build(self) -> StructuredInstructionConfig<T> {
-        // If descriptions are empty, set to None
-        let mut config = self.config;
-        if let Some(descriptions) = &config.descriptions {
-            if descriptions.is_empty() {
-                config.descriptions = None;
-            }
-        }
-        
-        config
-    }
-}
-
-impl<T: StructuredOutput> Default for StructuredInstructionConfigBuilder<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Supported output formats
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema-validation", derive(JsonSchema))]
-#[serde(rename_all = "lowercase")]
+/// Output format for structured data
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OutputFormat {
     /// JSON format
     Json,
-    
     /// YAML format (requires yaml feature)
     #[cfg(feature = "yaml")]
     Yaml,
-    
     /// XML format (requires xml feature)
     #[cfg(feature = "xml")]
-    #[serde(rename = "xml")]
     Xml,
 }
 
 impl Default for OutputFormat {
     fn default() -> Self {
-        Self::Json
+        OutputFormat::Json
     }
 }
 
-/// Validation options
-#[cfg(feature = "schema-validation")]
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Configuration for validating structured data
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationOptions {
-    /// Whether to allow additional properties
-    pub allow_additional_properties: bool,
-    
-    /// Whether to require all required properties
+    /// Whether all required properties must be present
     pub require_all_required_properties: bool,
 }
 
-#[cfg(feature = "schema-validation")]
 impl Default for ValidationOptions {
     fn default() -> Self {
         Self {
-            allow_additional_properties: false,
             require_all_required_properties: true,
         }
     }
 }
 
-/// Structured instruction generation result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema-validation", derive(JsonSchema))]
-pub struct StructuredInstruction {
-    /// Generated complete instruction
-    pub instruction: String,
-    
-    /// Format for parsing response
+/// Configuration for structured instructions
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: for<'a> Deserialize<'a>"))]
+pub struct Config<T: Serialize + for<'a> Deserialize<'a> + Clone + std::fmt::Debug> {
+    /// Optional prefix text
+    pub prefix: Option<String>,
+
+    /// Optional suffix text
+    pub suffix: Option<String>,
+
+    /// Output format for the structured data
     pub format: OutputFormat,
-    
-    /// Generated JSON Schema string (if schema-validation feature is enabled)
-    #[cfg(feature = "schema-validation")]
-    pub json_schema: Option<String>,
+
+    /// Sample schema (example)
+    pub schema: Option<T>,
+
+    /// Optional descriptions for schema fields (ordered by insertion)
+    pub descriptions: Option<IndexMap<String, String>>,
+
+    /// Whether to validate the response against the schema
+    pub validate: bool,
+
+    /// Validation options
+    pub validation_options: Option<ValidationOptions>,
+
+    /// Phantom data for T
+    pub _marker: PhantomData<T>,
 }
 
-/// Structured response parsing result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound = "T: StructuredOutput")]
-pub struct StructuredResponse<T: StructuredOutput> {
-    /// Parsed structured data
+impl<T: Serialize + for<'a> Deserialize<'a> + Clone + std::fmt::Debug> Default for Config<T> {
+    fn default() -> Self {
+        Self {
+            prefix: None,
+            suffix: None,
+            format: OutputFormat::default(),
+            schema: None,
+            descriptions: None,
+            validate: false,
+            validation_options: None,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: Serialize + for<'a> Deserialize<'a> + Clone + std::fmt::Debug> Config<T> {
+    /// Create a configuration with schema only
+    pub fn with_schema(schema: T) -> Self {
+        Self {
+            schema: Some(schema),
+            ..Default::default()
+        }
+    }
+
+    /// Create a configuration with prefix and schema
+    pub fn with_prefix_schema(prefix: impl Into<String>, schema: T) -> Self {
+        Self {
+            prefix: Some(prefix.into()),
+            schema: Some(schema),
+            ..Default::default()
+        }
+    }
+
+    /// Add a prefix to the configuration
+    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Add a suffix to the configuration
+    pub fn suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.suffix = Some(suffix.into());
+        self
+    }
+
+    /// Set the output format
+    pub fn format(mut self, format: OutputFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Add a field description
+    pub fn describe(mut self, field: impl Into<String>, description: impl Into<String>) -> Self {
+        let descriptions = self.descriptions.get_or_insert_with(IndexMap::new);
+        descriptions.insert(field.into(), description.into());
+        self
+    }
+
+    /// Enable validation
+    pub fn validate(mut self, enable: bool) -> Self {
+        self.validate = enable;
+        self
+    }
+
+    /// Set validation options
+    pub fn validation_options(mut self, options: ValidationOptions) -> Self {
+        self.validation_options = Some(options);
+        self
+    }
+
+    /// Convert the configuration to an instruction
+    pub fn to_instruction(&self) -> Instruction {
+        let mut content = String::new();
+
+        // Add prefix if available
+        if let Some(ref prefix) = self.prefix {
+            content.push_str(prefix);
+            content.push_str("\n\n");
+        }
+
+        // Add example
+        if let Some(schema) = &self.schema {
+            // Add field descriptions if available
+            if let Some(descriptions) = &self.descriptions {
+                content.push_str("The response should include:\n");
+
+                // Serialize schema to value to extract field names
+                if let Ok(value) = serde_json::to_value(schema) {
+                    if let serde_json::Value::Object(map) = value {
+                        // Use descriptions order for fields when possible
+                        for (field, description) in descriptions {
+                            if map.contains_key(field) {
+                                content.push_str(&format!("- {}: {}\n", field, description));
+                            }
+                        }
+                        
+                        // Add any fields from schema that weren't in descriptions
+                        for (field, _) in map {
+                            if !descriptions.contains_key(&field) {
+                                content.push_str(&format!("- {}\n", field));
+                            }
+                        }
+                    }
+                }
+
+                content.push_str("\n");
+            }
+
+            // Add format specification
+            match self.format {
+                OutputFormat::Json => {
+                    content.push_str("Please return the response in JSON format.\n\n");
+
+                    if let Ok(json) = serde_json::to_string_pretty(schema) {
+                        content.push_str(&format!("Example format:\n```json\n{}\n```\n", json));
+                    }
+                }
+                #[cfg(feature = "yaml")]
+                OutputFormat::Yaml => {
+                    content.push_str("Please return the response in YAML format.\n\n");
+
+                    if let Ok(yaml) = serde_yaml::to_string(schema) {
+                        content.push_str(&format!("Example format:\n```yaml\n{}\n```\n", yaml));
+                    }
+                }
+                #[cfg(feature = "xml")]
+                OutputFormat::Xml => {
+                    content.push_str("Please return the response in XML format.\n\n");
+
+                    content.push_str("Example format:\n```xml\n<root>\n");
+
+                    if let Ok(value) = serde_json::to_value(schema) {
+                        if let serde_json::Value::Object(map) = value {
+                            for (field, value) in map {
+                                let value_str = match value {
+                                    serde_json::Value::String(s) => s,
+                                    _ => value.to_string(),
+                                };
+                                content
+                                    .push_str(&format!("  <{}>{}</{}>\n", field, value_str, field));
+                            }
+                        }
+                    }
+
+                    content.push_str("</root>\n```\n");
+                }
+            }
+        }
+
+        // Add suffix if available
+        if let Some(ref suffix) = self.suffix {
+            content.push_str("\n");
+            content.push_str(suffix);
+        }
+
+        Instruction { content }
+    }
+}
+
+/// Structured instruction
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Instruction {
+    /// Instruction content
+    pub content: String,
+}
+
+impl Instruction {
+    /// Create a new instruction
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+        }
+    }
+
+    /// Get the instruction text
+    pub fn text(&self) -> &str {
+        &self.content
+    }
+
+    /// Convert the instruction to string
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+}
+
+impl<S: Into<String>> From<S> for Instruction {
+    fn from(content: S) -> Self {
+        Self::new(content)
+    }
+}
+
+/// Response from structured instruction
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: for<'a> Deserialize<'a>"))]
+pub struct Response<T: Serialize + for<'a> Deserialize<'a> + Clone + std::fmt::Debug> {
+    /// Parsed data
     pub data: T,
-    
-    /// Original response text
+
+    /// Raw response
     pub raw_response: String,
-    
-    /// Validation messages (only valid when schema-validation feature is enabled)
-    #[cfg(feature = "schema-validation")]
+
+    /// Validation messages (if validation was performed)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub validation_messages: Option<Vec<String>>,
 }
 
-impl<T: StructuredOutput> Default for StructuredInstructionConfig<T> 
-where
-    T: Default,
-{
-    fn default() -> Self {
-        StructuredInstructionConfigBuilder::new()
-            .schema(T::default())
-            .build()
-    }
-} 
+/// Error types for parsing structured data
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    /// Unable to extract data from response
+    #[error("Data extraction error: {0}")]
+    Extraction(String),
+
+    /// Validation error
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
+    /// XML parsing error
+    #[cfg(feature = "xml")]
+    #[error("XML parsing error: {0}")]
+    XmlParse(String),
+
+    /// Other errors
+    #[error("Error: {0}")]
+    Other(String),
+}
