@@ -19,6 +19,8 @@ impl<T> Structured for T where T: Clone + std::fmt::Debug + Serialize {}
 pub enum OutputFormat {
     /// JSON format
     Json,
+    /// JSON Array format
+    JsonArray,
     /// YAML format (requires yaml feature)
     #[cfg(feature = "yaml")]
     Yaml,
@@ -192,6 +194,14 @@ impl<T: Serialize + for<'a> Deserialize<'a> + Clone + std::fmt::Debug> Config<T>
 
                     if let Ok(json) = serde_json::to_string_pretty(schema) {
                         content.push_str(&format!("Example format:\n```json\n{}\n```\n", json));
+                    }
+                }
+                OutputFormat::JsonArray => {
+                    content.push_str("Please return the response as a JSON array of items.\n\n");
+
+                    if let Ok(json) = serde_json::to_string_pretty(schema) {
+                        // 为了展示数组格式，将单个对象包装在数组中
+                        content.push_str(&format!("Example format:\n```json\n[\n  {}\n]\n```\n", json));
                     }
                 }
                 #[cfg(feature = "yaml")]

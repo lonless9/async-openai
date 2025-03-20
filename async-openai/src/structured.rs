@@ -27,7 +27,7 @@ use quick_xml::de::from_str as xml_from_str;
 
 /// Regular expressions for extracting structured data
 static JSON_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```").unwrap());
+    LazyLock::new(|| Regex::new(r"```(?:json)?\s*([\s\S]*?)\s*```").unwrap());
 
 #[cfg(feature = "yaml")]
 static YAML_REGEX: LazyLock<Regex> =
@@ -139,7 +139,7 @@ where
     /// Parse model response
     pub fn parse_response(&self, response: &str) -> Result<Response<T>, ParseError> {
         match self.config.format {
-            OutputFormat::Json => self.parse_json_response(response),
+            OutputFormat::Json | OutputFormat::JsonArray => self.parse_json_response(response),
             #[cfg(feature = "yaml")]
             OutputFormat::Yaml => self.parse_yaml_response(response),
             #[cfg(feature = "xml")]
@@ -175,7 +175,7 @@ where
 
     /// Parse JSON response with validation
     fn parse_json_response(&self, response: &str) -> Result<Response<T>, ParseError> {
-        let data = extract_json(response)?;
+        let data = extract_json_data(response)?;
         self.validate_and_create_response(data, response)
     }
 
@@ -274,13 +274,28 @@ where
 
 // Extract common parsing functions to reduce code duplication
 /// Extract JSON data from a response string
-fn extract_json<T: for<'de> Deserialize<'de>>(response: &str) -> Result<T, ParseError> {
-    JSON_REGEX
+/// This function can handle both single JSON objects and JSON arrays
+fn extract_json_data<T: for<'de> Deserialize<'de>>(response: &str) -> Result<T, ParseError> {
+    // First try to extract JSON from code blocks
+    let json_str = JSON_REGEX
         .captures(response)
         .and_then(|captures| captures.get(1))
-        .map(|json_str| serde_json::from_str(json_str.as_str()))
-        .unwrap_or_else(|| serde_json::from_str(response))
-        .map_err(|e| ParseError::Extraction(format!("Unable to extract JSON: {}", e)))
+        .map(|m| m.as_str())
+        .unwrap_or(response);
+
+    // Parse the JSON string, which can be either an object or an array
+    serde_json::from_str(json_str)
+        .map_err(|e| ParseError::Extraction(format!("Unable to extract JSON data: {}", e)))
+}
+
+/// Kept for backward compatibility, delegates to extract_json_data
+fn extract_json<T: for<'de> Deserialize<'de>>(response: &str) -> Result<T, ParseError> {
+    extract_json_data(response)
+}
+
+/// Kept for backward compatibility, delegates to extract_json_data
+fn extract_json_array<T: for<'de> Deserialize<'de>>(response: &str) -> Result<T, ParseError> {
+    extract_json_data(response)
 }
 
 #[cfg(feature = "yaml")]
@@ -307,4 +322,83 @@ fn extract_xml<T: for<'de> Deserialize<'de>>(response: &str) -> Result<T, ParseE
             xml_from_str(response)
                 .map_err(|e| ParseError::XmlParse(format!("Unable to extract XML: {}", e)))
         })
+}
+
+/// Implementation of Default trait for single object types
+///
+/// This allows users to create generator instances in a more concise way:
+/// ```
+/// let generator = Generator::<MyType>::default();
+/// ```
+///
+/// Requires type T to implement the Default trait to use this feature.
+/// For types that already implement Default like Vec<T>, it can be used directly.
+impl<T> Default for Generator<T>
+where
+    T: Structured + for<'de> Deserialize<'de> + JsonSchema + Default,
+{
+    fn default() -> Self {
+        Self::new(Config::with_schema(T::default()))
+    }
+}
+
+/// Convenience methods for creating generators with common formats
+impl<T> Generator<T>
+where
+    T: Structured + for<'de> Deserialize<'de> + JsonSchema,
+{
+    /// Create a generator with JSON format output
+    pub fn json(schema: T) -> Self {
+        Self::with_schema(schema).format(OutputFormat::Json)
+    }
+
+    /// Create a generator with JSON array format output
+    pub fn json_array(schema: T) -> Self {
+        Self::with_schema(schema).format(OutputFormat::JsonArray)
+    }
+
+    #[cfg(feature = "yaml")]
+    /// Create a generator with YAML format output
+    pub fn yaml(schema: T) -> Self {
+        Self::with_schema(schema).format(OutputFormat::Yaml)
+    }
+
+    #[cfg(feature = "xml")]
+    /// Create a generator with XML format output
+    pub fn xml(schema: T) -> Self {
+        Self::with_schema(schema).format(OutputFormat::Xml)
+    }
+}
+
+/// Convenience constructors for common data structures
+impl<K, V> Generator<std::collections::HashMap<K, V>>
+where
+    K: std::fmt::Display + std::hash::Hash + Eq + Structured + for<'de> Deserialize<'de> + JsonSchema,
+    V: Structured + for<'de> Deserialize<'de> + JsonSchema,
+{
+    /// Create a generator from an empty map
+    pub fn empty_map() -> Self {
+        Self::with_schema(std::collections::HashMap::new())
+    }
+    
+    /// Create a generator from key-value pairs
+    pub fn from_pairs(pairs: Vec<(K, V)>) -> Self {
+        let map: std::collections::HashMap<K, V> = pairs.into_iter().collect();
+        Self::with_schema(map)
+    }
+}
+
+/// Convenience constructors for dynamic JSON values
+impl Generator<serde_json::Value> {
+    /// Create a generator from an empty JSON object
+    pub fn empty_value() -> Self {
+        Self::with_schema(serde_json::json!({}))
+    }
+    
+    /// Create a generator from a JSON string
+    pub fn from_json_str(json_str: &str) -> Result<Self, ParseError> {
+        let value = serde_json::from_str(json_str)
+            .map_err(|e| ParseError::Extraction(format!("Invalid JSON: {}", e)))?;
+        Ok(Self::with_schema(value))
+    }
 }
